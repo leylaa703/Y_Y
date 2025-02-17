@@ -1,0 +1,185 @@
+ #define WIN32_LEAN_AND_MEAN
+#define _WIN32_WINNT 0x501  // инициализируем версию виндуса (то есть по сути прям вручную прописываем ее), это нужно для того, чтобы работали функции freeaddrinfo
+
+#include <windows.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <stdlib.h>
+#include <stdio.h>
+
+#define DEFAULT_BUFLEN 512 //описание размера буфера(то есть наш буфер способен хранить максимум информации на 512 байт)
+#define DEFAULT_PORT "27015"
+
+
+
+
+
+
+int __cdecl main(void) {
+    WSADATA wsaData; //структура, в которой хранятся информация о версии Winsock
+    int iResult; //переменная для хранения результатов различных операций
+
+    SOCKET ListenSocket = INVALID_SOCKET; //сокет, который будет использоваться для прослушивания входящих соединений (изначально установлен в INVALID_SOCKET потому что он еще не инициализирован
+    SOCKET ClientSocket1 = INVALID_SOCKET; //сокет для первого клиента, он тоже пока пустой, так как клиент не подключен
+    SOCKET ClientSocket2 = INVALID_SOCKET; // такая же история, только для второго клиента
+
+    struct addrinfo *result = NULL;
+    struct addrinfo hints;
+
+    int iSendResult;
+    char recvbuf[DEFAULT_BUFLEN]; //переменная буфера, в буфере будут храниться сообщения, отправленные клиентами
+    int recvbuflen = DEFAULT_BUFLEN;
+
+    // инициализируем Winsock
+    iResult = WSAStartup(MAKEWORD(2, 2), &wsaData); // вызов функции для инициализации Winsock
+    if (iResult != 0) {//проверяет, была ли инициализация успешной
+        printf("WSAStartup failed with error: %d\n", iResult); //если произошла ошибка, выводит сообщение об ошибке с кодом ошибки
+        return 1;
+    }
+
+    ZeroMemory(&hints, sizeof(hints)); //Функция, которая обнуляет память структуры hints, чтобы в ней не хранились какие то левые значения
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+    hints.ai_flags = AI_PASSIVE;
+
+
+    iResult = getaddrinfo(NULL, DEFAULT_PORT, &hints, &result); //NULL: указывает, что нужно использовать текущий IP-адрес (то есть того компьютера, на котором программа), DEFAULT_PORT: использует порт, определенный ранее, &hints: указывает на структуру hints для определения необходимых параметров, &result: указывает на адрес, где будет размещена полученная информация
+
+    if (iResult != 0) {
+        printf("getaddrinfo failed with error: %d\n", iResult);
+        WSACleanup();
+        return 1;
+    }
+
+    // создаем сокет для сервера, который будет прослушивать входящие соединения от клиентов
+    ListenSocket = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
+    if (ListenSocket == INVALID_SOCKET) { // проверяет, был ли сокет успешно создан. если ListenSocket равен INVALID_SOCKET, это означает, что произошла ошибка
+        printf("socket failed with error: %d\n", WSAGetLastError());
+        freeaddrinfo(result);
+        WSACleanup();
+        return 1;
+    }
+
+    // настраиваем сокет для прослушивания
+    iResult = bind(ListenSocket, result->ai_addr, (int)result->ai_addrlen); // функция bind связывает сокет с адресом и портом, указанными в result
+    if (iResult == SOCKET_ERROR) { // проверяет, была ли операция bind успешной, если iResult равен SOCKET_ERROR, это означает, что произошла ошибка
+        printf("bind failed with error: %d\n", WSAGetLastError());
+        freeaddrinfo(result);
+        closesocket(ListenSocket);
+        WSACleanup();
+        return 1;
+    }
+
+    freeaddrinfo(result);
+
+    iResult = listen(ListenSocket, SOMAXCONN); //Функция listen начинает прослушивание входящих соединений на сокете, то есть присоединяются ли в нам клиенты, ListenSocket: сокет, который будет прослушивать входящие соединения, SOMAXCONN: константа, указывающая максимальное количество ожидающих соединений ( в нашем случае 2)
+
+    if (iResult == SOCKET_ERROR) { //опять проверка на соединение
+        printf("listen failed with error: %d\n", WSAGetLastError());
+        closesocket(ListenSocket);
+        WSACleanup();
+        return 1;
+    }
+
+    // подключаем первогоо клиента
+    ClientSocket1 = accept(ListenSocket, NULL, NULL);
+    if (ClientSocket1 == INVALID_SOCKET) {
+        printf("accept failed with error: %d\n", WSAGetLastError());
+        closesocket(ListenSocket);
+        WSACleanup();
+        return 1;
+    }
+
+    // подключаем второго клиента
+    ClientSocket2 = accept(ListenSocket, NULL, NULL);
+    if (ClientSocket2 == INVALID_SOCKET) {
+        printf("accept failed with error: %d\n", WSAGetLastError());
+        closesocket(ListenSocket);
+        WSACleanup();
+        return 1;
+    }
+
+    //  закрываем сокет для прослушивания, так как сервер больше не будет принимать новые соединения
+    closesocket(ListenSocket);
+
+    //отправим первому клиенту, сообщение что он №1
+    sprintf (recvbuf, "%d", 1);
+    iSendResult = send(ClientSocket1, recvbuf, sizeof(recvbuf), 0);
+            if (iSendResult == SOCKET_ERROR) {
+                printf("send failed with error: %d\n", WSAGetLastError());
+                closesocket(ClientSocket1);
+                closesocket(ClientSocket2);
+                WSACleanup();
+                return 1;
+            }
+    //отправим второму клиенту, сообщение что он №2
+    sprintf (recvbuf, "%d", 2);
+    iSendResult = send(ClientSocket2, recvbuf, sizeof(recvbuf), 0);
+            if (iSendResult == SOCKET_ERROR) {
+                printf("send failed with error: %d\n", WSAGetLastError());
+                closesocket(ClientSocket1);
+                closesocket(ClientSocket2);
+                WSACleanup();
+                return 1;
+            }
+
+    // основной цикл для общения
+    while (1) { //это бесконечный цикл, который будет выполняться до тех пор, пока не будет выполнен оператор break, на это указывает (1), ну типо единичка
+
+        ZeroMemory(recvbuf, recvbuflen); //очистка буфера, это нкжно, чтобы избежать случайного использования старых данных
+
+        // получение данных от первого клиента
+        int iResult1 = recv(ClientSocket1, recvbuf, recvbuflen, 0); //в эту переменную будет сохранено колличество байт, полученных от клиента (то есть по сути, когда клиент написал какое то сообщение, то оно имеее какой размер байт, вот этот размер и будет храниться в переменной)
+        if (iResult1 > 0) { //если iresult1>0, это значит, что клиент написал какое то сообщение, то есть занял сколько байт
+            printf("Client 1 sent: %s\n", recvbuf); //выводим сообщение клиента, то есть когда он написал сообщение, оно было помещено в переменную recvbuf(это буфер, но по сути он представляет собой массив, а каждый элемент это буква) и сейчас то, что хранилось в буфере, то есть сообщение, выводится на экран
+
+            //отправка сообщения второму клиенту
+            iSendResult = send(ClientSocket2, recvbuf, iResult1, 0); //send это Функция, которая отправляет данные через указанный сокет, то есть она отправит второму клиенту сообщение из буфера, размером iresult1
+            if (iSendResult == SOCKET_ERROR) { // проверка, произошла ли ошибка при отправке данных
+                printf("send failed with error: %d\n", WSAGetLastError()); // то есть если ошибка произошла, то выводим сообщение об ошибке, отключаем сразу два сокета
+                closesocket(ClientSocket1);
+                closesocket(ClientSocket2);
+                WSACleanup(); // возвращает код последней ошибки
+                return 1;
+            }
+        } else if (iResult1 == 0) { // то есть если сообщение не пришло, а это значит что оно не заняло нисколько памяти, то выводим сообщение, что конекта нет
+            printf("Client 1 disconnected\n");
+            break;
+        } else { //тоже сообщение об ошибки
+            printf("recv failed with error: %d\n", WSAGetLastError());
+            break;
+        }
+
+
+        ZeroMemory(recvbuf, recvbuflen); //чистим буфер, чтобы он был пустой, так как там должно будет храиться следующее сообщение и чтобы не было смеешения двух разных сообщений, мы его чистим
+
+        // получение данных от второго клиента, не буду описывать, тут все тоже самое, что и у первого клиента
+        int iResult2 = recv(ClientSocket2, recvbuf, recvbuflen, 0);
+        if (iResult2 > 0) {
+            printf("Client 2 sent: %s\n", recvbuf);
+
+            iSendResult = send(ClientSocket1, recvbuf, iResult2, 0);
+            if (iSendResult == SOCKET_ERROR) {
+                printf("send failed with error: %d\n", WSAGetLastError());
+                closesocket(ClientSocket1);
+                closesocket(ClientSocket2);
+                WSACleanup();
+                return 1;
+            }
+        } else if (iResult2 == 0) {
+            printf("Client 2 disconnected\n");
+            break;
+        } else {
+            printf("recv failed with error: %d\n", WSAGetLastError());
+            break;
+        }
+    }
+
+    // закрываем сокеты
+    closesocket(ClientSocket1);
+    closesocket(ClientSocket2);
+    WSACleanup(); //освобождаем ресурсы, использованные winsock
+
+    return 0;
+}

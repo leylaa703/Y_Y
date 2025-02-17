@@ -1,0 +1,185 @@
+#define WIN32_LEAN_AND_MEAN
+#define _WIN32_WINNT 0x501  // Для Windows XP (это инициализация виндуса, нужно для того, чтобы работали функции freeaddrinfo)
+
+#include <windows.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <stdlib.h>
+#include <stdio.h>
+
+#define DEFAULT_BUFLEN 512
+#define DEFAULT_PORT "27015"
+
+
+
+
+void xor_encrypt_decrypt(char *data, int data_len, char xor_key) {
+    for (int i = 0; i < data_len; i++) {
+        //если символ тождественнен ключу, то его НЕ ШИФРУЕМ
+        //т.к. xor_key ^ xor_key = 0, а символ '0' - это признак конца строки
+        //и строки будут разрываться в том месте, где встречается
+        //символ равный ключу.
+        if (data[i]!=xor_key)
+        {
+            data[i] ^= xor_key;
+        }
+    }
+}
+
+int __cdecl main(int argc, char **argv) {
+    WSADATA wsaData; //cтруктура, используемая для хранения информации о реализации Winsock
+    SOCKET ConnectSocket = INVALID_SOCKET; //cоздание дескриптора сокета для подключения. Инициализируется значением INVALID_SOCKET, что указывает на то, что сокет еще не создан (представляет сокет, но пока не является им)
+    struct addrinfo *result = NULL, //структура для хранения хоста и порта
+                    *ptr = NULL,
+                    hints;
+    char sendbuf[DEFAULT_BUFLEN]; //массив символов (буфер) для отправляемых данных
+    char recvbuf[DEFAULT_BUFLEN]; //массив символов (буфер) для получаемых данных
+    int iResult;
+    int recvbuflen = DEFAULT_BUFLEN; //хранит длину буфера для получения данных
+    int numclient;
+    char xor_key=0; //ключ шифрования
+    // поверка параметров
+    if (argc != 2) { //проверка, передано ли правильное количество аргументов командной строки (должно быть ровно 2: имя программы и имя сервера)
+        printf("usage: %s server-name\n", argv[0]);
+        return 1;
+    }
+
+    // инициализация Winsock
+    iResult = WSAStartup(MAKEWORD(2, 2), &wsaData); //функция для инициализации библиотеки Winsock
+    if (iResult != 0) {
+        printf("WSAStartup failed with error: %d\n", iResult);
+        return 1;
+    }
+
+    ZeroMemory(&hints, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+
+    // разрешение адреса и порта
+    iResult = getaddrinfo(argv[1], DEFAULT_PORT, &hints, &result);
+    if (iResult != 0) {
+        printf("getaddrinfo failed with error: %d\n", iResult);
+        WSACleanup();
+        return 1;
+    }
+
+    // подключение к серверу
+    for (ptr = result; ptr != NULL; ptr = ptr->ai_next) {
+        ConnectSocket = socket(ptr->ai_family, ptr->ai_socktype, ptr->ai_protocol);
+        if (ConnectSocket == INVALID_SOCKET) { //проверка на успешность создания сокета
+            printf("socket failed with error: %d\n", WSAGetLastError());
+            WSACleanup();
+            return 1;
+        }
+
+        iResult = connect(ConnectSocket, ptr->ai_addr, (int)ptr->ai_addrlen);
+        if (iResult == SOCKET_ERROR) { //проверка на успешность подключения
+            closesocket(ConnectSocket);
+            ConnectSocket = INVALID_SOCKET; //сброс значения сокета на инвалида(хахаха), указывая, что сокет больше не используется
+            continue; //
+        }
+        break;
+    }
+
+    freeaddrinfo(result); //освобождает память, выделенную для списка адресов, полученных из getaddrinfo. Это необходимо для предотвращения утечек памяти
+
+    if (ConnectSocket == INVALID_SOCKET) {
+        printf("Unable to connect to server!\n");
+        WSACleanup(); // Функция, которая очищает все ресурсы, использовавшиеся библиотекой Winsock
+        return 1;
+    }
+
+// получаем от сервера, какой мы номер клиента 1 или 2
+    iResult = recv(ConnectSocket, recvbuf, recvbuflen, 0); //Переменная для хранения результата функции recv, которая возвращает количество байтов, фактически полученных от сокета. recv: Функция для чтения данных из сокета.
+    if (iResult > 0) {
+
+        sscanf(recvbuf,"%d",&numclient); //Функция, которая считывает строку из заданного буфера (в данном случае recvbuf) и записывает значения в переменные
+        //теперь numclient - номер клиента 1 или 2
+        printf("Your client number: %d\n", numclient);
+    } else if (iResult == 0) {
+        printf("Connection closed\n");
+
+    } else {
+        printf("recv failed with error: %d\n", WSAGetLastError());
+
+    }
+
+//вводим ключ шифрования, один символ
+    while(1)
+    {
+        printf("Enter key, one symbol: ");
+        fgets(sendbuf, sizeof(sendbuf), stdin); // получаем сообщение от пользователя, fgets считывает строку символов из стандартного ввода (клавиатура), sendbuf — это массив символов, в который будет помещен ввод пользователя, stdin — обозначает стандартный ввод
+        if ((int)strlen(sendbuf)==2)
+        {
+            printf("Key is: %c\n",sendbuf[0]);
+            xor_key = sendbuf[0];
+            break;
+        }
+    }
+
+
+//покажем клиенту, что он первый начинает диалог
+    if (numclient==1)
+    {
+       printf("You first\n");
+    }
+
+// цикл отправки и получения сообщений
+    do {
+//только первый клиент начнет ПЕРВЫЙ цикл с самого начала
+        if (numclient == 1)
+        {
+            // получаем сообщение от пользователя
+
+            printf("Enter message: ");
+            fgets(sendbuf, sizeof(sendbuf), stdin); // получаем сообщение от пользователя
+
+            //убираем символ новой строки, если он есть
+            sendbuf[strcspn(sendbuf, "\n")] = '\0'; //меняем enter на конец строки, strcspn - ищет, где впервые встречается символ \n
+
+            // если клиент ввел "exit", завершаем программу
+            if (strcmp(sendbuf, "exit") == 0) {
+                printf("Closing connection...\n");
+                break;
+            }
+
+            // функция шифрования
+            xor_encrypt_decrypt(sendbuf, (int)strlen(sendbuf), xor_key);
+
+            // отправляем сообщение серверу
+            iResult = send(ConnectSocket, sendbuf, (int)strlen(sendbuf)+1, 0); //отправляет содержимое буфера
+            if (iResult == SOCKET_ERROR) {
+                printf("send failed with error: %d\n", WSAGetLastError());
+                break;
+            }
+
+
+        }
+
+//а второй клиент начнет ПЕРВЫЙ цикл отсюда
+        numclient = 1; //НО теперь (далее) оба клиента будет работать по полному циклу
+
+
+        // получаем ответ от сервера
+        iResult = recv(ConnectSocket, recvbuf, recvbuflen, 0); //принимает данные от сервера и записывает в буфер
+        if (iResult > 0) {
+            // расшифровываем полученное сообщение
+            xor_encrypt_decrypt(recvbuf, iResult-1, xor_key); // iResult-1 удаляем символ конца строки, так как он не шифруется
+            printf("Server says: %s\n", recvbuf);
+        } else if (iResult == 0) {
+            printf("Connection closed\n");
+            break;
+        } else {
+            printf("recv failed with error: %d\n", WSAGetLastError());
+            break;
+        }
+
+    } while (1); // цикл продолжается, пока не введена команда для завершения
+
+    // закрытие соединения
+    closesocket(ConnectSocket);
+    WSACleanup();
+
+    return 0;
+}
